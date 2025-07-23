@@ -4,17 +4,26 @@
   <meta charset="UTF-8">
   <title>눈썹 디자인 미리보기</title>
   <style>
-    canvas { border: 1px solid #ccc; cursor: grab; touch-action: none; }
-    .controls { margin: 10px 0; }
+    body { font-family: sans-serif; padding: 10px; }
+    canvas { border: 1px solid #ccc; touch-action: none; max-width: 100%; height: auto; }
+    .controls { margin: 10px 0; display: flex; flex-direction: column; gap: 8px; max-width: 600px; }
+    .controls label { font-weight: bold; }
+    .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+    input[type="range"] { width: 100%; }
   </style>
 </head>
 <body>
   <h2>눈썹 디자인 미리보기</h2>
 
   <div class="controls">
-    얼굴 이미지: <input type="file" id="faceInput"><br><br>
-    눈썹 이미지(PNG/JPG): <input type="file" id="browInput"><br><br>
-    투명도: <input type="range" id="alphaSlider" min="0" max="255" value="255">
+    <label>얼굴 이미지: <input type="file" id="faceInput"></label>
+    <label>눈썹 이미지(PNG/JPG): <input type="file" id="browInput"></label>
+    <label>투명도: <input type="range" id="alphaSlider" min="0" max="255" value="255"></label>
+    <label>눈썹 색상: <input type="color" id="colorPicker" value="#000000"></label>
+    <div class="buttons">
+      <button id="saveBtn">이미지 저장</button>
+      <button id="resetBtn">리셋</button>
+    </div>
   </div>
 
   <canvas id="canvas" width="600" height="500"></canvas>
@@ -25,9 +34,13 @@
     const alphaSlider = document.getElementById("alphaSlider");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const colorPicker = document.getElementById("colorPicker");
+    const saveBtn = document.getElementById("saveBtn");
+    const resetBtn = document.getElementById("resetBtn");
 
     let faceImg = null;
     let browImg = null;
+    let browOriginal = null;
     let browPos = { x: 300, y: 200 };
     let browScale = 1.0;
     let browAngle = 0;
@@ -95,13 +108,55 @@
       tempCtx.putImageData(imageData, 0, 0);
       const transparentImg = new Image();
       transparentImg.onload = () => {
-        browImg = resizeImage(transparentImg, canvas.width / 2, canvas.height / 2);
-        browImg.onload = draw;
+        browOriginal = transparentImg;
+        applyBrowColor();
       };
       transparentImg.src = tempCanvas.toDataURL();
     }
 
+    function applyBrowColor() {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = browOriginal.width;
+      tempCanvas.height = browOriginal.height;
+      const ctx2 = tempCanvas.getContext("2d");
+      ctx2.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+      ctx2.drawImage(browOriginal, 0, 0);
+
+      const imageData = ctx2.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      const data = imageData.data;
+      const hex = colorPicker.value;
+      const rNew = parseInt(hex.substr(1,2), 16);
+      const gNew = parseInt(hex.substr(3,2), 16);
+      const bNew = parseInt(hex.substr(5,2), 16);
+
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] > 0) {
+          data[i] = rNew;
+          data[i + 1] = gNew;
+          data[i + 2] = bNew;
+        }
+      }
+      ctx2.putImageData(imageData, 0, 0);
+      browImg = resizeImage(tempCanvas, canvas.width / 2, canvas.height / 2);
+      browImg.onload = draw;
+    }
+
+    colorPicker.oninput = applyBrowColor;
     alphaSlider.oninput = draw;
+    resetBtn.onclick = () => {
+      browScale = 1.0;
+      browAngle = 0;
+      browPos = { x: 300, y: 200 };
+      colorPicker.value = "#000000";
+      applyBrowColor();
+    };
+
+    saveBtn.onclick = () => {
+      const link = document.createElement('a');
+      link.download = 'result.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    };
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -120,7 +175,6 @@
       ctx.globalAlpha = 1.0;
     }
 
-    // 터치 제스처: 이동 + 핀치줌 + 회전
     canvas.ontouchstart = e => {
       if (e.touches.length === 1) {
         const rect = canvas.getBoundingClientRect();
@@ -131,7 +185,6 @@
         const h = browImg.height * browScale;
         const dx = mx - browPos.x;
         const dy = my - browPos.y;
-
         if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) {
           isDragging = true;
           offset.x = dx;
