@@ -48,6 +48,7 @@
     let offset = { x: 0, y: 0 };
     let isGesture = false;
     let gestureStart = {};
+    let browColorApplied = false;
 
     faceInput.onchange = e => {
       const file = e.target.files[0];
@@ -109,12 +110,15 @@
       const transparentImg = new Image();
       transparentImg.onload = () => {
         browOriginal = transparentImg;
-        applyBrowColor();
+        browColorApplied = false;
+        browImg = resizeImage(browOriginal, canvas.width / 2, canvas.height / 2);
+        browImg.onload = draw;
       };
       transparentImg.src = tempCanvas.toDataURL();
     }
 
     function applyBrowColor() {
+      browColorApplied = true;
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = browOriginal.width;
       tempCanvas.height = browOriginal.height;
@@ -141,14 +145,25 @@
       browImg.onload = draw;
     }
 
-    colorPicker.oninput = applyBrowColor;
+    colorPicker.oninput = () => {
+      if (browOriginal) {
+        applyBrowColor();
+      }
+    };
+
     alphaSlider.oninput = draw;
     resetBtn.onclick = () => {
       browScale = 1.0;
       browAngle = 0;
       browPos = { x: 300, y: 200 };
       colorPicker.value = "#000000";
-      applyBrowColor();
+      browColorApplied = false;
+      if (browOriginal) {
+        browImg = resizeImage(browOriginal, canvas.width / 2, canvas.height / 2);
+        browImg.onload = draw;
+      } else {
+        draw();
+      }
     };
 
     saveBtn.onclick = () => {
