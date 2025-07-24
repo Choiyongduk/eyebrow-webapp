@@ -32,11 +32,11 @@
     const faceInput = document.getElementById("faceInput");
     const browInput = document.getElementById("browInput");
     const alphaSlider = document.getElementById("alphaSlider");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
     const colorPicker = document.getElementById("colorPicker");
     const saveBtn = document.getElementById("saveBtn");
     const resetBtn = document.getElementById("resetBtn");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
 
     let faceImg = null;
     let browImg = null;
@@ -50,153 +50,220 @@
     let gestureStart = {};
     let browColorApplied = false;
 
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (faceImg) ctx.drawImage(faceImg, 0, 0, canvas.width, canvas.height);
-      if (browImg) {
-        ctx.save();
-        ctx.translate(browPos.x, browPos.y);
-        ctx.rotate(browAngle);
-        ctx.globalAlpha = alphaSlider.value / 255;
-        const w = browImg.width * browScale;
-        const h = browImg.height * browScale;
-        ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
-        ctx.restore();
-        ctx.globalAlpha = 1.0;
-      }
-    }
-
     faceInput.onchange = e => {
       const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          faceImg = new Image();
-          faceImg.onload = draw;
-          faceImg.src = reader.result;
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        const img = new Image();
+        img.onload = () => {
+          faceImg = resizeImage(img, canvas.width, canvas.height);
+          draw();
         };
-        reader.readAsDataURL(file);
-      }
+        img.src = evt.target.result;
+      };
+      reader.readAsDataURL(file);
     };
 
     browInput.onchange = e => {
       const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const img = new Image();
-          img.onload = () => {
-            browOriginal = img;
-            browImg = img;
-            browScale = 1.0;
-            browAngle = 0;
-            browPos = { x: 300, y: 200 };
-            browColorApplied = false;
-            draw();
-          };
-          img.src = reader.result;
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        const img = new Image();
+        img.onload = () => {
+          processBrowImage(img);
         };
-        reader.readAsDataURL(file);
+        img.src = evt.target.result;
+      };
+      reader.readAsDataURL(file);
+    };
+
+    function resizeImage(img, maxWidth, maxHeight) {
+      const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width * ratio;
+      canvas.height = img.height * ratio;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const resized = new Image();
+      resized.src = canvas.toDataURL();
+      return resized;
+    }
+
+    function processBrowImage(img) {
+      const tempCanvas = document.createElement("canvas");
+      const tempCtx = tempCanvas.getContext("2d");
+      tempCanvas.width = img.width;
+      tempCanvas.height = img.height;
+
+      tempCtx.drawImage(img, 0, 0);
+      const imageData = tempCtx.getImageData(0, 0, img.width, img.height);
+      const data = imageData.data;
+
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i + 1], b = data[i + 2];
+        if (r > 220 && g > 220 && b > 220) data[i + 3] = 0;
       }
-    };
 
-    alphaSlider.oninput = () => {
-      draw();
-    };
+      tempCtx.putImageData(imageData, 0, 0);
+      const transparentImg = new Image();
+      transparentImg.onload = () => {
+        browOriginal = transparentImg;
+        browColorApplied = false;
+        browImg = resizeImage(browOriginal, canvas.width / 2, canvas.height / 2);
+        browImg.onload = draw;
+      };
+      transparentImg.src = tempCanvas.toDataURL();
+    }
 
-    colorPicker.oninput = () => {
-      if (!browOriginal) return;
-      const temp = document.createElement("canvas");
-      temp.width = browOriginal.width;
-      temp.height = browOriginal.height;
-      const tctx = temp.getContext("2d");
-      tctx.drawImage(browOriginal, 0, 0);
-      const imageData = tctx.getImageData(0, 0, temp.width, temp.height);
+    function applyBrowColor() {
+      browColorApplied = true;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = browOriginal.width;
+      tempCanvas.height = browOriginal.height;
+      const ctx2 = tempCanvas.getContext("2d");
+      ctx2.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+      ctx2.drawImage(browOriginal, 0, 0);
+
+      const imageData = ctx2.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
       const data = imageData.data;
       const hex = colorPicker.value;
-      const r = parseInt(hex.substr(1, 2), 16);
-      const g = parseInt(hex.substr(3, 2), 16);
-      const b = parseInt(hex.substr(5, 2), 16);
+      const rNew = parseInt(hex.substr(1,2), 16);
+      const gNew = parseInt(hex.substr(3,2), 16);
+      const bNew = parseInt(hex.substr(5,2), 16);
+
       for (let i = 0; i < data.length; i += 4) {
         if (data[i + 3] > 0) {
-          data[i] = r;
-          data[i + 1] = g;
-          data[i + 2] = b;
+          data[i] = rNew;
+          data[i + 1] = gNew;
+          data[i + 2] = bNew;
         }
       }
-      tctx.putImageData(imageData, 0, 0);
-      browImg = new Image();
+      ctx2.putImageData(imageData, 0, 0);
+      browImg = resizeImage(tempCanvas, canvas.width / 2, canvas.height / 2);
       browImg.onload = draw;
-      browImg.src = temp.toDataURL();
-      browColorApplied = true;
+    }
+
+    colorPicker.oninput = () => {
+      if (browOriginal) {
+        applyBrowColor();
+      }
+    };
+
+    alphaSlider.oninput = draw;
+    resetBtn.onclick = () => {
+      browScale = 1.0;
+      browAngle = 0;
+      browPos = { x: 300, y: 200 };
+      colorPicker.value = "#000000";
+      browColorApplied = false;
+      if (browOriginal) {
+        browImg = resizeImage(browOriginal, canvas.width / 2, canvas.height / 2);
+        browImg.onload = draw;
+      } else {
+        draw();
+      }
     };
 
     saveBtn.onclick = () => {
-      const link = document.createElement("a");
-      link.download = "result.png";
+      const link = document.createElement('a');
+      link.download = 'result.png';
       link.href = canvas.toDataURL();
       link.click();
     };
 
-    resetBtn.onclick = () => {
-      if (browOriginal) {
-        browImg = browOriginal;
-        browScale = 1.0;
-        browAngle = 0;
-        browPos = { x: 300, y: 200 };
-        browColorApplied = false;
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (faceImg) ctx.drawImage(faceImg, 0, 0, canvas.width, canvas.height);
+      if (!browImg) return;
+
+      const w = browImg.width * browScale;
+      const h = browImg.height * browScale;
+
+      ctx.save();
+      ctx.translate(browPos.x, browPos.y);
+      ctx.rotate(browAngle * Math.PI / 180);
+      ctx.globalAlpha = alphaSlider.value / 255;
+      ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
+      ctx.restore();
+      ctx.globalAlpha = 1.0;
+    }
+
+    canvas.ontouchstart = e => {
+      if (e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const mx = touch.clientX - rect.left;
+        const my = touch.clientY - rect.top;
+        const w = browImg.width * browScale;
+        const h = browImg.height * browScale;
+        const dx = mx - browPos.x;
+        const dy = my - browPos.y;
+        if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) {
+          isDragging = true;
+          offset.x = dx;
+          offset.y = dy;
+        }
+      } else if (e.touches.length === 2) {
+        isGesture = true;
+        gestureStart = {
+          dist: getTouchDistance(e),
+          angle: getTouchAngle(e),
+          scale: browScale,
+          rotate: browAngle
+        };
+      }
+    };
+
+    canvas.ontouchmove = e => {
+      if (isDragging && e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        browPos.x = touch.clientX - rect.left - offset.x;
+        browPos.y = touch.clientY - rect.top - offset.y;
+        draw();
+      } else if (isGesture && e.touches.length === 2) {
+        const dist = getTouchDistance(e);
+        const angle = getTouchAngle(e);
+        browScale = gestureStart.scale * (dist / gestureStart.dist);
+        browAngle = gestureStart.rotate + (angle - gestureStart.angle);
         draw();
       }
     };
 
-    canvas.addEventListener("pointerdown", e => {
-      if (e.pointerType === "touch") {
-        canvas.setPointerCapture(e.pointerId);
-        gestureStart[e.pointerId] = { x: e.clientX, y: e.clientY };
-        if (Object.keys(gestureStart).length === 2) {
-          isGesture = true;
-        } else {
-          isDragging = true;
-          offset.x = e.clientX - browPos.x;
-          offset.y = e.clientY - browPos.y;
-        }
-      } else {
-        isDragging = true;
-        offset.x = e.offsetX - browPos.x;
-        offset.y = e.offsetY - browPos.y;
-      }
-    });
-
-    canvas.addEventListener("pointermove", e => {
-      if (isGesture && Object.keys(gestureStart).length === 2) {
-        const ids = Object.keys(gestureStart);
-        const p1 = gestureStart[ids[0]];
-        const p2 = gestureStart[ids[1]];
-        const dx = e.clientX - p2.x;
-        const dy = e.clientY - p2.y;
-        const d1 = Math.hypot(p1.x - p2.x, p1.y - p2.y);
-        const d2 = Math.hypot(p1.x - (p2.x + dx), p1.y - (p2.y + dy));
-        browScale *= d2 / d1;
-        browAngle += dx * 0.005;
-        gestureStart[ids[1]] = { x: e.clientX, y: e.clientY };
-        draw();
-      } else if (isDragging) {
-        browPos.x = e.clientX - offset.x;
-        browPos.y = e.clientY - offset.y;
-        draw();
-      }
-    });
-
-    canvas.addEventListener("pointerup", e => {
+    canvas.ontouchend = () => {
       isDragging = false;
-      gestureStart = {};
       isGesture = false;
-    });
+    };
 
-    canvas.addEventListener("wheel", e => {
+    function getTouchDistance(e) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      return Math.hypot(dx, dy);
+    }
+
+    function getTouchAngle(e) {
+      const dx = e.touches[1].clientX - e.touches[0].clientX;
+      const dy = e.touches[1].clientY - e.touches[0].clientY;
+      return Math.atan2(dy, dx) * 180 / Math.PI;
+    }
+
+    canvas.onwheel = e => {
       e.preventDefault();
-      browScale += e.deltaY < 0 ? 0.05 : -0.05;
+      browScale *= (e.deltaY < 0) ? 1.05 : 0.95;
+      if (browScale < 0.1) browScale = 0.1;
       draw();
+    };
+
+    document.addEventListener("keydown", e => {
+      if (e.key === "ArrowLeft") {
+        browAngle -= 1;
+        draw();
+      } else if (e.key === "ArrowRight") {
+        browAngle += 1;
+        draw();
+      }
     });
   </script>
 </body>
