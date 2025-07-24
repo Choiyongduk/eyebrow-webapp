@@ -6,7 +6,7 @@
   <style>
     body { font-family: sans-serif; padding: 10px; }
     canvas { border: 1px solid #ccc; touch-action: none; max-width: 100%; height: auto; }
-    video { display: none; max-width: 100%; }
+    video { display: none; max-width: 100%; transform: scaleX(-1); }
     .controls { margin: 10px 0; display: flex; flex-direction: column; gap: 8px; max-width: 600px; }
     .controls label { font-weight: bold; }
     .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -26,6 +26,7 @@
       <button id="resetBtn">리셋</button>
       <button id="startCameraBtn">📷 카메라 실행</button>
       <button id="captureBtn">얼굴 촬영</button>
+      <button id="cancelCameraBtn">촬영 취소</button>
     </div>
   </div>
 
@@ -43,6 +44,7 @@
     const resetBtn = document.getElementById("resetBtn");
     const startCameraBtn = document.getElementById("startCameraBtn");
     const captureBtn = document.getElementById("captureBtn");
+    const cancelCameraBtn = document.getElementById("cancelCameraBtn");
     const video = document.getElementById("video");
 
     let faceImg = null;
@@ -65,11 +67,9 @@
         ctx.translate(browPos.x, browPos.y);
         ctx.rotate(browAngle);
         ctx.globalAlpha = alphaSlider.value / 255;
-
         const w = browImg.width * browScale;
         const h = browImg.height * browScale;
         ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
-
         ctx.restore();
         ctx.globalAlpha = 1.0;
       }
@@ -108,8 +108,6 @@
         reader.readAsDataURL(file);
       }
     };
-
-    alphaSlider.oninput = draw;
 
     colorPicker.oninput = () => {
       if (!browOriginal) return;
@@ -171,6 +169,8 @@
       tempCanvas.width = canvas.width;
       tempCanvas.height = canvas.height;
       const tempCtx = tempCanvas.getContext("2d");
+      tempCtx.translate(tempCanvas.width, 0);
+      tempCtx.scale(-1, 1);
       tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
       faceImg = new Image();
       faceImg.onload = draw;
@@ -179,15 +179,19 @@
       video.srcObject?.getTracks().forEach(track => track.stop());
     };
 
-    // 마우스 & 터치 드래그, 확대, 회전
+    cancelCameraBtn.onclick = () => {
+      video.style.display = "none";
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+      }
+    };
+
     canvas.addEventListener("pointerdown", e => {
       if (e.pointerType === "touch") {
         canvas.setPointerCapture(e.pointerId);
         if (!isGesture) {
           gestureStart[e.pointerId] = { x: e.clientX, y: e.clientY };
-          if (Object.keys(gestureStart).length === 2) {
-            isGesture = true;
-          }
+          if (Object.keys(gestureStart).length === 2) isGesture = true;
         }
       } else {
         isDragging = true;
