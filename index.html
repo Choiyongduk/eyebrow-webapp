@@ -6,7 +6,6 @@
   <style>
     canvas { border: 1px solid #ccc; cursor: grab; }
     .controls { margin: 10px 0; }
-    video { display: none; transform: scaleX(-1); max-width: 100%; }
   </style>
 </head>
 <body>
@@ -15,14 +14,9 @@
   <div class="controls">
     얼굴 이미지: <input type="file" id="faceInput"><br><br>
     눈썹 이미지(PNG/JPG): <input type="file" id="browInput"><br><br>
-    투명도: <input type="range" id="alphaSlider" min="0" max="255" value="255"><br><br>
-
-    <button id="startCameraBtn">📷 카메라 실행</button>
-    <button id="captureBtn">📸 촬영</button>
-    <button id="cancelCameraBtn">❌ 취소</button>
+    투명도: <input type="range" id="alphaSlider" min="0" max="255" value="255">
   </div>
 
-  <video id="video" autoplay playsinline></video>
   <canvas id="canvas" width="600" height="500"></canvas>
 
   <script>
@@ -31,10 +25,6 @@
     const alphaSlider = document.getElementById("alphaSlider");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    const startCameraBtn = document.getElementById("startCameraBtn");
-    const captureBtn = document.getElementById("captureBtn");
-    const cancelCameraBtn = document.getElementById("cancelCameraBtn");
-    const video = document.getElementById("video");
 
     let faceImg = new Image();
     let browImg = new Image();
@@ -84,7 +74,7 @@
       for (let i = 0; i < data.length; i += 4) {
         const r = data[i], g = data[i + 1], b = data[i + 2];
         if (r > 220 && g > 220 && b > 220) {
-          data[i + 3] = 0; // 투명 처리
+          data[i + 3] = 0; // 투명화
         }
       }
 
@@ -126,7 +116,8 @@
       const dx = mx - browPos.x;
       const dy = my - browPos.y;
 
-      if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
+      // 간단한 범위 체크
+      if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) {
         isDragging = true;
         offset.x = dx;
         offset.y = dy;
@@ -164,45 +155,6 @@
         draw();
       }
     });
-
-    // 카메라 실행
-    startCameraBtn.onclick = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
-        video.srcObject = stream;
-        video.style.display = "block";
-      } catch (err) {
-        alert("카메라 접근 실패: " + err.message);
-      }
-    };
-
-    // 촬영
-    captureBtn.onclick = () => {
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = canvas.width;
-      tempCanvas.height = canvas.height;
-      const tempCtx = tempCanvas.getContext("2d");
-
-      // 좌우 반전 보정
-      tempCtx.translate(tempCanvas.width, 0);
-      tempCtx.scale(-1, 1);
-      tempCtx.drawImage(video, 0, 0, tempCanvas.width, tempCanvas.height);
-
-      faceImg = new Image();
-      faceImg.onload = draw;
-      faceImg.src = tempCanvas.toDataURL();
-
-      video.style.display = "none";
-      video.srcObject?.getTracks().forEach(track => track.stop());
-    };
-
-    // 취소
-    cancelCameraBtn.onclick = () => {
-      video.style.display = "none";
-      if (video.srcObject) {
-        video.srcObject.getTracks().forEach(track => track.stop());
-      }
-    };
   </script>
 </body>
 </html>
