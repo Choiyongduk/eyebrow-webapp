@@ -53,11 +53,12 @@
     }
 
     .controls input[type="color"] {
-      width: 100%;
+      width: 35px;
       height: 35px;
       border: none;
-      border-radius: 8px;
+      border-radius: 50%;
       margin-bottom: 15px;
+      padding: 0;
     }
 
     canvas {
@@ -142,7 +143,6 @@
       reader.onload = evt => {
         const img = new Image();
         img.onload = () => {
-          // 원본 저장
           originalBrowImg = img;
           browImg = removeWhite(img);
           draw();
@@ -235,6 +235,7 @@
       ctx.globalAlpha = 1.0;
     }
 
+    // 🖱️ 마우스 드래그 & 휠
     canvas.addEventListener("mousedown", e => {
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -274,79 +275,75 @@
       else if (e.key === "ArrowRight") browAngle += 2;
       draw();
     });
-  </script>
- // 🟧 모바일 터치 이벤트 처리
-  let lastTouchDist = null;
-  let lastTouchAngle = null;
 
-  canvas.addEventListener("touchstart", e => {
-    if (!browImg) return;
-    e.preventDefault();
-    if (e.touches.length === 1) {
+    // 📱 모바일 터치 제스처
+    let lastTouchDist = null;
+    let lastTouchAngle = null;
+
+    canvas.addEventListener("touchstart", e => {
+      if (!browImg) return;
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.touches[0].clientX - rect.left;
+        const my = e.touches[0].clientY - rect.top;
+        const dx = mx - browPos.x;
+        const dy = my - browPos.y;
+        const w = browImg.width * browScale;
+        const h = browImg.height * browScale;
+        if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
+          isDragging = true;
+          offset = { x: dx, y: dy };
+        }
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        lastTouchDist = Math.hypot(dx, dy);
+        lastTouchAngle = Math.atan2(dy, dx);
+      }
+    }, { passive: false });
+
+    canvas.addEventListener("touchmove", e => {
+      if (!browImg) return;
+      e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-      const mx = e.touches[0].clientX - rect.left;
-      const my = e.touches[0].clientY - rect.top;
-      const dx = mx - browPos.x;
-      const dy = my - browPos.y;
-      const w = browImg.width * browScale;
-      const h = browImg.height * browScale;
-      if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
-        isDragging = true;
-        offset = { x: dx, y: dy };
+
+      if (e.touches.length === 1 && isDragging) {
+        browPos.x = e.touches[0].clientX - rect.left - offset.x;
+        browPos.y = e.touches[0].clientY - rect.top - offset.y;
+        draw();
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        const dist = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
+
+        if (lastTouchDist !== null) {
+          const scaleChange = dist / lastTouchDist;
+          browScale *= scaleChange;
+          if (browScale < 0.2) browScale = 0.2;
+        }
+
+        if (lastTouchAngle !== null) {
+          const angleChange = angle - lastTouchAngle;
+          browAngle += angleChange * (180 / Math.PI);
+        }
+
+        lastTouchDist = dist;
+        lastTouchAngle = angle;
+        draw();
       }
-    } else if (e.touches.length === 2) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      lastTouchDist = Math.hypot(dx, dy);
-      lastTouchAngle = Math.atan2(dy, dx);
-    }
-  }, { passive: false });
+    }, { passive: false });
 
-  canvas.addEventListener("touchmove", e => {
-    if (!browImg) return;
-    e.preventDefault();
-    const rect = canvas.getBoundingClientRect();
-
-    if (e.touches.length === 1 && isDragging) {
-      browPos.x = e.touches[0].clientX - rect.left - offset.x;
-      browPos.y = e.touches[0].clientY - rect.top - offset.y;
-      draw();
-    } else if (e.touches.length === 2) {
-      const dx = e.touches[1].clientX - e.touches[0].clientX;
-      const dy = e.touches[1].clientY - e.touches[0].clientY;
-      const dist = Math.hypot(dx, dy);
-      const angle = Math.atan2(dy, dx);
-
-      // 🔹 스케일 변경
-      if (lastTouchDist !== null) {
-        const scaleChange = dist / lastTouchDist;
-        browScale *= scaleChange;
-        if (browScale < 0.2) browScale = 0.2;
+    canvas.addEventListener("touchend", e => {
+      if (e.touches.length < 2) {
+        lastTouchDist = null;
+        lastTouchAngle = null;
       }
-
-      // 🔹 회전 변경
-      if (lastTouchAngle !== null) {
-        const angleChange = angle - lastTouchAngle;
-        browAngle += angleChange * (180 / Math.PI);
+      if (e.touches.length === 0) {
+        isDragging = false;
       }
-
-      lastTouchDist = dist;
-      lastTouchAngle = angle;
-
-      draw();
-    }
-  }, { passive: false });
-
-  canvas.addEventListener("touchend", e => {
-    if (e.touches.length < 2) {
-      lastTouchDist = null;
-      lastTouchAngle = null;
-    }
-    if (e.touches.length === 0) {
-      isDragging = false;
-    }
-  });
-</script>
-
+    });
+  </script>
 </body>
 </html>
