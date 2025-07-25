@@ -4,76 +4,17 @@
   <meta charset="UTF-8">
   <title>눈썹 디자인 미리보기</title>
   <style>
-    body {
-      font-family: sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #fdfdfd;
-    }
-
-    .controls {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      padding: 10px;
-      background: #fff0e0;
-      border-bottom: 2px solid #ffa14e;
-      position: sticky;
-      top: 0;
-      z-index: 10;
-    }
-
-    .controls label {
-      margin-right: 10px;
-      font-weight: bold;
-    }
-
-    .controls input[type="file"],
-    .controls input[type="range"] {
-      margin-right: 20px;
-    }
-
-    #colorButtons {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-
-    .color-button {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      border: 2px solid #999;
-      cursor: pointer;
-    }
-
-    canvas {
-      display: block;
-      margin: 0 auto;
-      border: 1px solid #ccc;
-      cursor: grab;
-      background: #fff;
-    }
+    canvas { border: 1px solid #ccc; cursor: grab; }
+    .controls { margin: 10px 0; }
   </style>
 </head>
 <body>
+  <h2>눈썹 디자인 미리보기</h2>
 
   <div class="controls">
-    <label>얼굴 이미지:</label>
-    <input type="file" id="faceInput">
-    <label>눈썹 이미지:</label>
-    <input type="file" id="browInput">
-    <label>투명도:</label>
-    <input type="range" id="alphaSlider" min="0" max="255" value="255">
-
-    <label>색상:</label>
-    <div id="colorButtons">
-      <div class="color-button" style="background:#000" data-color="#000000"></div>
-      <div class="color-button" style="background:#663300" data-color="#663300"></div>
-      <div class="color-button" style="background:#a0522d" data-color="#a0522d"></div>
-      <div class="color-button" style="background:#cc6600" data-color="#cc6600"></div>
-      <div class="color-button" style="background:#964b00" data-color="#964b00"></div>
-    </div>
+    얼굴 이미지: <input type="file" id="faceInput"><br><br>
+    눈썹 이미지(PNG/JPG): <input type="file" id="browInput"><br><br>
+    투명도: <input type="range" id="alphaSlider" min="0" max="255" value="255">
   </div>
 
   <canvas id="canvas" width="600" height="500"></canvas>
@@ -84,17 +25,14 @@
     const alphaSlider = document.getElementById("alphaSlider");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
-    const colorButtons = document.querySelectorAll(".color-button");
 
     let faceImg = new Image();
     let browImg = new Image();
-    let browOriginal = null;
     let browPos = { x: 300, y: 200 };
     let browScale = 1.0;
     let browAngle = 0;
     let isDragging = false;
     let offset = { x: 0, y: 0 };
-    let selectedColor = null;
 
     faceInput.onchange = e => {
       const file = e.target.files[0];
@@ -113,12 +51,11 @@
       if (file) {
         const reader = new FileReader();
         reader.onload = evt => {
-          const img = new Image();
-          img.onload = () => {
-            browOriginal = img;
+          browImg = new Image();
+          browImg.onload = () => {
             processBrowImage();
           };
-          img.src = evt.target.result;
+          browImg.src = evt.target.result;
         };
         reader.readAsDataURL(file);
       }
@@ -127,48 +64,29 @@
     function processBrowImage() {
       const tempCanvas = document.createElement("canvas");
       const tempCtx = tempCanvas.getContext("2d");
-      tempCanvas.width = browOriginal.width;
-      tempCanvas.height = browOriginal.height;
+      tempCanvas.width = browImg.width;
+      tempCanvas.height = browImg.height;
 
-      tempCtx.drawImage(browOriginal, 0, 0);
-      const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      tempCtx.drawImage(browImg, 0, 0);
+      const imageData = tempCtx.getImageData(0, 0, browImg.width, browImg.height);
       const data = imageData.data;
 
       for (let i = 0; i < data.length; i += 4) {
         const r = data[i], g = data[i + 1], b = data[i + 2];
         if (r > 220 && g > 220 && b > 220) {
-          data[i + 3] = 0;
-        } else if (selectedColor) {
-          const color = hexToRgb(selectedColor);
-          data[i] = color.r;
-          data[i + 1] = color.g;
-          data[i + 2] = color.b;
+          data[i + 3] = 0; // 투명화
         }
       }
 
       tempCtx.putImageData(imageData, 0, 0);
+      const transparentURL = tempCanvas.toDataURL();
+
       browImg = new Image();
       browImg.onload = draw;
-      browImg.src = tempCanvas.toDataURL();
-    }
-
-    function hexToRgb(hex) {
-      const bigint = parseInt(hex.slice(1), 16);
-      return {
-        r: (bigint >> 16) & 255,
-        g: (bigint >> 8) & 255,
-        b: bigint & 255
-      };
+      browImg.src = transparentURL;
     }
 
     alphaSlider.oninput = draw;
-
-    colorButtons.forEach(button => {
-      button.onclick = () => {
-        selectedColor = button.dataset.color;
-        if (browOriginal) processBrowImage();
-      };
-    });
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -198,7 +116,8 @@
       const dx = mx - browPos.x;
       const dy = my - browPos.y;
 
-      if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
+      // 간단한 범위 체크
+      if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) {
         isDragging = true;
         offset.x = dx;
         offset.y = dy;
