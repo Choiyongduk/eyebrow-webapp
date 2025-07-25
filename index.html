@@ -22,9 +22,11 @@
       cursor: grab;
       max-width: 100%;
       height: auto;
+      touch-action: none;
     }
     input[type="file"],
-    input[type="range"] {
+    input[type="range"],
+    input[type="color"] {
       width: 100%;
       margin-top: 5px;
       margin-bottom: 15px;
@@ -42,7 +44,10 @@
     <input type="file" id="browInput"><br>
 
     <label>눈썹 투명도</label><br>
-    <input type="range" id="alphaSlider" min="0" max="255" value="255">
+    <input type="range" id="alphaSlider" min="0" max="255" value="255"><br>
+
+    <label>눈썹 색상 선택</label><br>
+    <input type="color" id="colorPicker" value="#000000">
   </div>
 
   <canvas id="canvas" width="600" height="500"></canvas>
@@ -51,16 +56,19 @@
     const faceInput = document.getElementById("faceInput");
     const browInput = document.getElementById("browInput");
     const alphaSlider = document.getElementById("alphaSlider");
+    const colorPicker = document.getElementById("colorPicker");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
     let faceImg = new Image();
     let browImg = new Image();
+    let browOriginal = null;
     let browPos = { x: 300, y: 200 };
     let browScale = 1.0;
     let browAngle = 0;
     let isDragging = false;
     let offset = { x: 0, y: 0 };
+    let pointers = {};
 
     faceInput.onchange = e => {
       const file = e.target.files[0];
@@ -97,14 +105,15 @@
               }
             }
             tempCtx.putImageData(imageData, 0, 0);
-            browImg = new Image();
-            browImg.onload = () => {
+            browOriginal = new Image();
+            browOriginal.onload = () => {
+              browImg = browOriginal;
               browPos = { x: 300, y: 200 };
               browScale = 1.0;
               browAngle = 0;
               draw();
             };
-            browImg.src = tempCanvas.toDataURL();
+            browOriginal.src = tempCanvas.toDataURL();
           };
           tempImg.src = evt.target.result;
         };
@@ -113,6 +122,32 @@
     };
 
     alphaSlider.oninput = draw;
+
+    colorPicker.oninput = () => {
+      if (!browOriginal) return;
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = browOriginal.width;
+      tempCanvas.height = browOriginal.height;
+      const tctx = tempCanvas.getContext("2d");
+      tctx.drawImage(browOriginal, 0, 0);
+      const imageData = tctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+      const data = imageData.data;
+      const hex = colorPicker.value;
+      const r = parseInt(hex.substr(1, 2), 16);
+      const g = parseInt(hex.substr(3, 2), 16);
+      const b = parseInt(hex.substr(5, 2), 16);
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i + 3] > 0) {
+          data[i] = r;
+          data[i + 1] = g;
+          data[i + 2] = b;
+        }
+      }
+      tctx.putImageData(imageData, 0, 0);
+      browImg = new Image();
+      browImg.onload = draw;
+      browImg.src = tempCanvas.toDataURL();
+    };
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -128,57 +163,51 @@
       ctx.globalAlpha = alphaSlider.value / 255;
       ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
       ctx.restore();
-
       ctx.globalAlpha = 1.0;
     }
 
-    canvas.onmousedown = e => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
+    let lastDist = 0;
+    canvas.addEventListener("pointerdown", e => {
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    });
 
-      const w = browImg.width * browScale;
-      const h = browImg.height * browScale;
-      const dx = mx - browPos.x;
-      const dy = my - browPos.y;
+    canvas.addEventListener("pointermove", e => {
+      if (!(e.pointerId in pointers)) return;
+      const prev = pointers[e.pointerId];
+      const dx = e.clientX - prev.x;
+      const dy = e.clientY - prev.y;
 
-      if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
-        isDragging = true;
-        offset.x = dx;
-        offset.y = dy;
-        canvas.style.cursor = "grabbing";
+      if (Object.keys(pointers).length === 1) {
+        browPos.x += dx;
+        browPos.y += dy;
+      } else if (Object.keys(pointers).length === 2) {
+        const ids = Object.keys(pointers);
+        const p1 = pointers[ids[0]];
+        const p2 = pointers[ids[1]];
+        const newP1 = (e.pointerId == ids[0]) ? { x: e.clientX, y: e.clientY } : p1;
+        const newP2 = (e.pointerId == ids[1]) ? { x: e.clientX, y: e.clientY } : p2;
+
+        const dist = Math.hypot(newP1.x - newP2.x, newP1.y - newP2.y);
+        if (lastDist > 0) browScale *= dist / lastDist;
+
+        const angle = Math.atan2(newP2.y - newP1.y, newP2.x - newP1.x);
+        const prevAngle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        browAngle += (angle - prevAngle) * (180 / Math.PI);
+
+        lastDist = dist;
       }
-    };
-
-    canvas.onmousemove = e => {
-      if (isDragging) {
-        const rect = canvas.getBoundingClientRect();
-        browPos.x = e.clientX - rect.left - offset.x;
-        browPos.y = e.clientY - rect.top - offset.y;
-        draw();
-      }
-    };
-
-    canvas.onmouseup = () => {
-      isDragging = false;
-      canvas.style.cursor = "grab";
-    };
-
-    canvas.onwheel = e => {
-      e.preventDefault();
-      browScale *= (e.deltaY < 0) ? 1.05 : 0.95;
-      if (browScale < 0.1) browScale = 0.1;
+      pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
       draw();
-    };
+    });
 
-    document.addEventListener("keydown", e => {
-      if (e.key === "ArrowLeft") {
-        browAngle -= 1;
-        draw();
-      } else if (e.key === "ArrowRight") {
-        browAngle += 1;
-        draw();
-      }
+    canvas.addEventListener("pointerup", e => {
+      delete pointers[e.pointerId];
+      if (Object.keys(pointers).length < 2) lastDist = 0;
+    });
+
+    canvas.addEventListener("pointercancel", e => {
+      delete pointers[e.pointerId];
+      if (Object.keys(pointers).length < 2) lastDist = 0;
     });
   </script>
 </body>
