@@ -3,14 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <title>히썹 눈썹 디자인 미리보기</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body {
+      font-family: 'Arial', sans-serif;
+      background: linear-gradient(to bottom, #ffe9d0, #fce2c7);
       margin: 0;
       padding: 20px;
-      font-family: sans-serif;
-      background: linear-gradient(#ffe6cc, #fff0e6);
-      color: #333;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -21,140 +19,130 @@
       margin-bottom: 20px;
     }
 
-    .container {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-
     .controls {
       display: flex;
       flex-direction: column;
       gap: 10px;
-      margin-bottom: 10px;
-      width: 90%;
-      max-width: 600px;
+      align-items: flex-start;
     }
 
-    input[type="file"] {
-      font-size: 14px;
+    label {
+      font-weight: bold;
     }
 
-    #alphaSlider, #colorPicker {
-      width: 100%;
-      max-width: 400px;
-    }
-
-    #canvas {
-      border: 4px solid #ff6600;
-      border-radius: 15px;
-      touch-action: none;
-      background: white;
-    }
-
-    button {
-      margin-top: 10px;
-      padding: 6px 12px;
+    #colorPicker {
+      width: 100px;
+      height: 40px;
+      border-radius: 20px;
       border: none;
-      background: #ff6600;
+      overflow: hidden;
+      padding: 0;
+    }
+
+    canvas {
+      margin-top: 20px;
+      border: 5px solid #ff6600;
+      border-radius: 16px;
+      touch-action: none;
+    }
+
+    #resetButton {
+      margin-top: 15px;
+      padding: 10px 20px;
+      background-color: #ff6600;
       color: white;
-      border-radius: 6px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
       cursor: pointer;
     }
   </style>
 </head>
 <body>
-
   <h2>히썹 눈썹 디자인 미리보기</h2>
+  <div class="controls">
+    <label>얼굴 이미지 업로드</label>
+    <input type="file" id="faceInput"><br>
 
-  <div class="container">
-    <div class="controls">
-      <label>얼굴 이미지 업로드</label>
-      <input type="file" id="faceInput" accept="image/*">
+    <label>눈썹 이미지(PNG/JPG)</label>
+    <input type="file" id="browInput"><br>
 
-      <label>눈썹 이미지(PNG/JPG)</label>
-      <input type="file" id="browInput" accept="image/*">
+    <label>눈썹 투명도</label>
+    <input type="range" id="alphaSlider" min="0" max="255" value="255">
 
-      <label>눈썹 투명도</label>
-      <input type="range" id="alphaSlider" min="0" max="255" value="255">
+    <label>눈썹 색상 선택</label>
+    <input type="color" id="colorPicker">
 
-      <label>눈썹 색상 선택</label>
-      <input type="color" id="colorPicker">
-
-      <button id="resetBtn">리셋</button>
-    </div>
-
-    <canvas id="canvas" width="600" height="500"></canvas>
+    <button id="resetButton">리셋</button>
   </div>
 
+  <canvas id="canvas" width="500" height="600"></canvas>
+
   <script>
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
+    const faceInput = document.getElementById('faceInput');
+    const browInput = document.getElementById('browInput');
+    const alphaSlider = document.getElementById('alphaSlider');
+    const colorPicker = document.getElementById('colorPicker');
+    const resetButton = document.getElementById('resetButton');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
 
-    const faceInput = document.getElementById("faceInput");
-    const browInput = document.getElementById("browInput");
-    const alphaSlider = document.getElementById("alphaSlider");
-    const colorPicker = document.getElementById("colorPicker");
-    const resetBtn = document.getElementById("resetBtn");
-
-    let faceImg = null;
-    let originalBrowImg = null;
-    let coloredBrowImg = null;
-    let browPos = { x: 300, y: 250 };
-    let browScale = 1;
+    let faceImg = new Image();
+    let browImgOriginal = null;
+    let browImgColored = null;
+    let browPos = { x: canvas.width / 2, y: canvas.height / 2 };
+    let browScale = 1.0;
     let browAngle = 0;
-    let dragging = false;
+    let isDragging = false;
     let dragOffset = { x: 0, y: 0 };
-    let initialDistance = 0;
-    let initialAngle = 0;
-    let touchStartData = null;
-    let colorApplied = false;
+    let lastTouchDistance = null;
+    let lastTouchAngle = null;
+    let applyColor = false;
+    let selectedColor = '#000000';
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (faceImg) ctx.drawImage(faceImg, 0, 0, canvas.width, canvas.height);
-      if (!coloredBrowImg) return;
+      if (faceImg.src) ctx.drawImage(faceImg, 0, 0, canvas.width, canvas.height);
+      if (!browImgColored) return;
 
-      const w = coloredBrowImg.width * browScale;
-      const h = coloredBrowImg.height * browScale;
+      const w = browImgColored.width * browScale;
+      const h = browImgColored.height * browScale;
 
       ctx.save();
       ctx.translate(browPos.x, browPos.y);
-      ctx.rotate(browAngle);
+      ctx.rotate(browAngle * Math.PI / 180);
       ctx.globalAlpha = alphaSlider.value / 255;
-      ctx.drawImage(coloredBrowImg, -w/2, -h/2, w, h);
+      ctx.drawImage(browImgColored, -w / 2, -h / 2, w, h);
       ctx.restore();
-      ctx.globalAlpha = 1;
+
+      ctx.globalAlpha = 1.0;
     }
 
-    function applyColor(color) {
-      if (!originalBrowImg) return;
-      const canvasTemp = document.createElement("canvas");
-      const ctxTemp = canvasTemp.getContext("2d");
-      canvasTemp.width = originalBrowImg.width;
-      canvasTemp.height = originalBrowImg.height;
-      ctxTemp.drawImage(originalBrowImg, 0, 0);
+    function recolorBrowImage(color) {
+      if (!browImgOriginal) return;
+      const canvasTmp = document.createElement('canvas');
+      const ctxTmp = canvasTmp.getContext('2d');
+      canvasTmp.width = browImgOriginal.width;
+      canvasTmp.height = browImgOriginal.height;
+      ctxTmp.drawImage(browImgOriginal, 0, 0);
 
-      const imageData = ctxTemp.getImageData(0, 0, canvasTemp.width, canvasTemp.height);
-      const data = imageData.data;
+      const imgData = ctxTmp.getImageData(0, 0, canvasTmp.width, canvasTmp.height);
+      const data = imgData.data;
       const rgb = hexToRgb(color);
 
       for (let i = 0; i < data.length; i += 4) {
-        if (data[i+3] > 0) { // only non-transparent
+        if (data[i + 3] > 10) {
           data[i] = rgb.r;
-          data[i+1] = rgb.g;
-          data[i+2] = rgb.b;
+          data[i + 1] = rgb.g;
+          data[i + 2] = rgb.b;
         }
       }
-
-      ctxTemp.putImageData(imageData, 0, 0);
-      coloredBrowImg = new Image();
-      coloredBrowImg.onload = draw;
-      coloredBrowImg.src = canvasTemp.toDataURL();
+      ctxTmp.putImageData(imgData, 0, 0);
+      browImgColored.src = canvasTmp.toDataURL();
     }
 
     function hexToRgb(hex) {
-      const bigint = parseInt(hex.slice(1), 16);
+      const bigint = parseInt(hex.replace('#', ''), 16);
       return {
         r: (bigint >> 16) & 255,
         g: (bigint >> 8) & 255,
@@ -163,125 +151,121 @@
     }
 
     faceInput.onchange = e => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        faceImg = new Image();
-        faceImg.onload = draw;
-        faceImg.src = reader.result;
-      };
-      reader.readAsDataURL(e.target.files[0]);
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = evt => {
+          faceImg.src = evt.target.result;
+          faceImg.onload = draw;
+        };
+        reader.readAsDataURL(file);
+      }
     };
 
     browInput.onchange = e => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const temp = new Image();
-        temp.onload = () => {
-          const canvasTemp = document.createElement("canvas");
-          const ctxTemp = canvasTemp.getContext("2d");
-          canvasTemp.width = temp.width;
-          canvasTemp.height = temp.height;
-          ctxTemp.drawImage(temp, 0, 0);
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = evt => {
+          browImgOriginal = new Image();
+          browImgOriginal.onload = () => {
+            browImgColored = new Image();
+            browImgColored.onload = draw;
+            const tmp = document.createElement('canvas');
+            const tmpCtx = tmp.getContext('2d');
+            tmp.width = browImgOriginal.width;
+            tmp.height = browImgOriginal.height;
+            tmpCtx.drawImage(browImgOriginal, 0, 0);
 
-          const imageData = ctxTemp.getImageData(0, 0, temp.width, temp.height);
-          const data = imageData.data;
-          for (let i = 0; i < data.length; i += 4) {
-            if (data[i] > 240 && data[i+1] > 240 && data[i+2] > 240) {
-              data[i+3] = 0;
+            const imgData = tmpCtx.getImageData(0, 0, tmp.width, tmp.height);
+            for (let i = 0; i < imgData.data.length; i += 4) {
+              const r = imgData.data[i], g = imgData.data[i + 1], b = imgData.data[i + 2];
+              if (r > 220 && g > 220 && b > 220) {
+                imgData.data[i + 3] = 0;
+              }
             }
-          }
-          ctxTemp.putImageData(imageData, 0, 0);
-
-          originalBrowImg = new Image();
-          originalBrowImg.onload = () => {
-            coloredBrowImg = originalBrowImg;
-            draw();
+            tmpCtx.putImageData(imgData, 0, 0);
+            browImgColored.src = tmp.toDataURL();
           };
-          originalBrowImg.src = canvasTemp.toDataURL();
-          colorApplied = false;
+          browImgOriginal.src = evt.target.result;
         };
-        temp.src = reader.result;
-      };
-      reader.readAsDataURL(e.target.files[0]);
+        reader.readAsDataURL(file);
+      }
     };
 
-    canvas.addEventListener("mousedown", e => {
-      const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const dx = mx - browPos.x;
-      const dy = my - browPos.y;
-      const w = coloredBrowImg?.width * browScale;
-      const h = coloredBrowImg?.height * browScale;
-      if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) {
-        dragging = true;
-        dragOffset = { x: dx, y: dy };
+    colorPicker.onchange = e => {
+      applyColor = true;
+      selectedColor = e.target.value;
+      recolorBrowImage(selectedColor);
+    };
+
+    resetButton.onclick = () => {
+      applyColor = false;
+      browScale = 1.0;
+      browAngle = 0;
+      if (browImgOriginal) {
+        browImgColored.src = browImgOriginal.src;
+      }
+    };
+
+    canvas.addEventListener('touchstart', e => {
+      if (e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const mx = touch.clientX - rect.left;
+        const my = touch.clientY - rect.top;
+        const dx = mx - browPos.x;
+        const dy = my - browPos.y;
+
+        const w = browImgColored.width * browScale;
+        const h = browImgColored.height * browScale;
+        if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
+          isDragging = true;
+          dragOffset.x = dx;
+          dragOffset.y = dy;
+        }
+      } else if (e.touches.length === 2) {
+        const [touch1, touch2] = e.touches;
+        lastTouchDistance = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+        lastTouchAngle = Math.atan2(touch2.clientY - touch1.clientY, touch2.clientX - touch1.clientX);
       }
     });
 
-    canvas.addEventListener("mousemove", e => {
-      if (!dragging) return;
-      const rect = canvas.getBoundingClientRect();
-      browPos.x = e.clientX - rect.left - dragOffset.x;
-      browPos.y = e.clientY - rect.top - dragOffset.y;
-      draw();
-    });
-
-    canvas.addEventListener("mouseup", () => dragging = false);
-
-    canvas.addEventListener("wheel", e => {
+    canvas.addEventListener('touchmove', e => {
       e.preventDefault();
-      browScale *= (e.deltaY < 0) ? 1.05 : 0.95;
-      browScale = Math.max(0.1, Math.min(5, browScale));
-      draw();
-    });
+      if (e.touches.length === 1 && isDragging) {
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        browPos.x = touch.clientX - rect.left - dragOffset.x;
+        browPos.y = touch.clientY - rect.top - dragOffset.y;
+        draw();
+      } else if (e.touches.length === 2) {
+        const [touch1, touch2] = e.touches;
+        const newDist = Math.hypot(touch2.clientX - touch1.clientX, touch2.clientY - touch1.clientY);
+        const newAngle = Math.atan2(touch2.clientY - touch1.clientY, touch2.clientX - touch1.clientX);
 
-    // 멀티터치 회전 + 확대
-    canvas.addEventListener("touchstart", e => {
-      if (e.touches.length === 2) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        initialDistance = Math.hypot(dx, dy);
-        initialAngle = Math.atan2(dy, dx);
-        touchStartData = { scale: browScale, angle: browAngle };
-      }
-    }, { passive: false });
+        if (lastTouchDistance) {
+          browScale *= newDist / lastTouchDistance;
+          if (browScale < 0.2) browScale = 0.2;
+        }
 
-    canvas.addEventListener("touchmove", e => {
-      e.preventDefault();
-      if (e.touches.length === 2 && touchStartData) {
-        const dx = e.touches[1].clientX - e.touches[0].clientX;
-        const dy = e.touches[1].clientY - e.touches[0].clientY;
-        const newDistance = Math.hypot(dx, dy);
-        const newAngle = Math.atan2(dy, dx);
-        browScale = touchStartData.scale * (newDistance / initialDistance);
-        browAngle = touchStartData.angle + (newAngle - initialAngle);
+        if (lastTouchAngle !== null) {
+          browAngle += (newAngle - lastTouchAngle) * 180 / Math.PI;
+        }
+
+        lastTouchDistance = newDist;
+        lastTouchAngle = newAngle;
         draw();
       }
     }, { passive: false });
 
-    colorPicker.oninput = () => {
-      if (originalBrowImg && !colorApplied) {
-        colorApplied = true;
-        applyColor(colorPicker.value);
-      } else if (originalBrowImg) {
-        applyColor(colorPicker.value);
-      }
-    };
-
-    resetBtn.onclick = () => {
-      if (originalBrowImg) {
-        coloredBrowImg = originalBrowImg;
-        browScale = 1;
-        browAngle = 0;
-        browPos = { x: 300, y: 250 };
-        colorApplied = false;
-        draw();
-      }
-    };
+    canvas.addEventListener('touchend', e => {
+      isDragging = false;
+      lastTouchDistance = null;
+      lastTouchAngle = null;
+    });
 
     alphaSlider.oninput = draw;
   </script>
-
 </body>
 </html>
