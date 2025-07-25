@@ -75,6 +75,8 @@
       font-size: 14px;
       border-radius: 6px;
       cursor: pointer;
+      margin-bottom: 10px;
+      display: block;
     }
 
     button:hover {
@@ -100,6 +102,8 @@
       <input type="color" id="colorPicker" />
 
       <button id="resetBtn">리셋</button>
+      <button id="saveBtn">이미지 저장</button>
+      <button id="mirrorBtn">좌우 대칭 복제</button>
     </div>
 
     <canvas id="canvas" width="500" height="600"></canvas>
@@ -111,6 +115,8 @@
     const alphaSlider = document.getElementById("alphaSlider");
     const colorPicker = document.getElementById("colorPicker");
     const resetBtn = document.getElementById("resetBtn");
+    const saveBtn = document.getElementById("saveBtn");
+    const mirrorBtn = document.getElementById("mirrorBtn");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
 
@@ -217,6 +223,29 @@
       colorApplied = false;
     };
 
+    saveBtn.onclick = () => {
+      const link = document.createElement('a');
+      link.download = "hisub_eyebrow_design.png";
+      link.href = canvas.toDataURL();
+      link.click();
+    };
+
+    mirrorBtn.onclick = () => {
+      if (!browImg) return;
+      const w = browImg.width * browScale;
+      const h = browImg.height * browScale;
+
+      ctx.save();
+      ctx.translate(canvas.width - browPos.x, browPos.y);
+      ctx.rotate(-browAngle * Math.PI / 180);
+      ctx.scale(-1, 1); // 좌우 반전
+      ctx.globalAlpha = alphaSlider.value / 255;
+      ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
+      ctx.restore();
+
+      ctx.globalAlpha = 1.0;
+    };
+
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (faceImg) ctx.drawImage(faceImg, 0, 0, canvas.width, canvas.height);
@@ -235,7 +264,6 @@
       ctx.globalAlpha = 1.0;
     }
 
-    // 🖱️ 마우스 드래그 & 휠
     canvas.addEventListener("mousedown", e => {
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -276,7 +304,7 @@
       draw();
     });
 
-    // 📱 모바일 터치 제스처
+    // 터치 제스처는 그대로 유지
     let lastTouchDist = null;
     let lastTouchAngle = null;
 
