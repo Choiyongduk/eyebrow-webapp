@@ -75,7 +75,6 @@
       font-size: 14px;
       border-radius: 6px;
       cursor: pointer;
-      margin-top: 5px;
     }
 
     button:hover {
@@ -124,7 +123,6 @@
     let isDragging = false;
     let offset = { x: 0, y: 0 };
     let colorApplied = false;
-    let holdTimer = null;
 
     faceInput.onchange = e => {
       const file = e.target.files[0];
@@ -233,9 +231,11 @@
       ctx.globalAlpha = alphaSlider.value / 255;
       ctx.drawImage(browImg, -w / 2, -h / 2, w, h);
       ctx.restore();
+
       ctx.globalAlpha = 1.0;
     }
 
+    // 🖱️ 마우스 드래그 & 휠
     canvas.addEventListener("mousedown", e => {
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -248,16 +248,7 @@
       if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
         isDragging = true;
         offset = { x: dx, y: dy };
-
-        holdTimer = setTimeout(() => {
-          saveBrowCutout();
-        }, 1000); // 1초 이상 누르면 저장
       }
-    });
-
-    canvas.addEventListener("mouseup", () => {
-      isDragging = false;
-      clearTimeout(holdTimer);
     });
 
     canvas.addEventListener("mousemove", e => {
@@ -266,6 +257,10 @@
       browPos.x = e.clientX - rect.left - offset.x;
       browPos.y = e.clientY - rect.top - offset.y;
       draw();
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      isDragging = false;
     });
 
     canvas.addEventListener("wheel", e => {
@@ -281,28 +276,74 @@
       draw();
     });
 
-    function saveBrowCutout() {
+    // 📱 모바일 터치 제스처
+    let lastTouchDist = null;
+    let lastTouchAngle = null;
+
+    canvas.addEventListener("touchstart", e => {
       if (!browImg) return;
+      e.preventDefault();
+      if (e.touches.length === 1) {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.touches[0].clientX - rect.left;
+        const my = e.touches[0].clientY - rect.top;
+        const dx = mx - browPos.x;
+        const dy = my - browPos.y;
+        const w = browImg.width * browScale;
+        const h = browImg.height * browScale;
+        if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
+          isDragging = true;
+          offset = { x: dx, y: dy };
+        }
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        lastTouchDist = Math.hypot(dx, dy);
+        lastTouchAngle = Math.atan2(dy, dx);
+      }
+    }, { passive: false });
 
-      const w = browImg.width * browScale;
-      const h = browImg.height * browScale;
+    canvas.addEventListener("touchmove", e => {
+      if (!browImg) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
 
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = w;
-      tempCanvas.height = h;
-      const tempCtx = tempCanvas.getContext("2d");
+      if (e.touches.length === 1 && isDragging) {
+        browPos.x = e.touches[0].clientX - rect.left - offset.x;
+        browPos.y = e.touches[0].clientY - rect.top - offset.y;
+        draw();
+      } else if (e.touches.length === 2) {
+        const dx = e.touches[1].clientX - e.touches[0].clientX;
+        const dy = e.touches[1].clientY - e.touches[0].clientY;
+        const dist = Math.hypot(dx, dy);
+        const angle = Math.atan2(dy, dx);
 
-      tempCtx.translate(w / 2, h / 2);
-      tempCtx.rotate(browAngle * Math.PI / 180);
-      tempCtx.globalAlpha = alphaSlider.value / 255;
-      tempCtx.drawImage(browImg, -w / 2, -h / 2, w, h);
-      tempCtx.globalAlpha = 1.0;
+        if (lastTouchDist !== null) {
+          const scaleChange = dist / lastTouchDist;
+          browScale *= scaleChange;
+          if (browScale < 0.2) browScale = 0.2;
+        }
 
-      const link = document.createElement("a");
-      link.download = "눈썹_누끼.png";
-      link.href = tempCanvas.toDataURL("image/png");
-      link.click();
-    }
+        if (lastTouchAngle !== null) {
+          const angleChange = angle - lastTouchAngle;
+          browAngle += angleChange * (180 / Math.PI);
+        }
+
+        lastTouchDist = dist;
+        lastTouchAngle = angle;
+        draw();
+      }
+    }, { passive: false });
+
+    canvas.addEventListener("touchend", e => {
+      if (e.touches.length < 2) {
+        lastTouchDist = null;
+        lastTouchAngle = null;
+      }
+      if (e.touches.length === 0) {
+        isDragging = false;
+      }
+    });
   </script>
 </body>
 </html>
