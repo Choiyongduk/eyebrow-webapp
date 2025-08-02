@@ -343,26 +343,7 @@
       if (e.touches.length === 0) {
         isDragging = false;
       }
-
-document.getElementById("saveBrowBtn").onclick = () => {
-  if (!browImg) {
-    alert("눈썹 이미지를 먼저 추가해 주세요!");
-    return;
-  }
-
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = browImg.width;
-  tempCanvas.height = browImg.height;
-  const tempCtx = tempCanvas.getContext('2d');
-  tempCtx.drawImage(browImg, 0, 0);
-
-  const link = document.createElement('a');
-  link.href = tempCanvas.toDataURL('image/png');
-  link.download = '눈썹_누끼.png';
-  link.click();
-};
     });
   </script>
 </body>
 </html>
-<button id="saveBrowBtn">눈썹 누끼 저장</button>
