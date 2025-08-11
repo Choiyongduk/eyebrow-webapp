@@ -13,7 +13,7 @@
     }
     .container { display: flex; flex-direction: row; align-items: flex-start; max-width: 1200px; width: 100%; }
     .controls {
-      width: 280px; margin-right: 30px; background-color: #fff9f3; padding: 20px; border-radius: 12px;
+      width: 300px; margin-right: 30px; background-color: #fff9f3; padding: 20px; border-radius: 12px;
       box-shadow: 0 0 10px rgba(0,0,0,0.05);
     }
     .controls h1 { color: #f2792b; font-size: 20px; margin-bottom: 20px; text-align: center; }
@@ -50,6 +50,7 @@
       <div class="row">
         <button id="resetBtn">리셋</button>
         <button id="eraseBtn">눈썹 지우기</button>
+        <button id="undoBtn">되돌리기</button>
       </div>
       <div class="muted" id="status">모델 로딩 중...</div>
     </div>
@@ -69,41 +70,37 @@
     const colorPicker = document.getElementById("colorPicker");
     const resetBtn = document.getElementById("resetBtn");
     const eraseBtn = document.getElementById("eraseBtn");
+    const undoBtn = document.getElementById("undoBtn");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
     const statusEl = document.getElementById("status");
 
+    // ---- 상태 ----
     let faceImg = null;
+    let originalFaceSrc = null;                 // 업로드 직후 얼굴 원본
+    let faceUndoStack = [];                     // 되돌리기 스택 (dataURL)
+    const MAX_UNDO = 10;
+
     let browImg = null;
     let originalBrowImg = null;
+    let browMaskCache = null;                   // 눈썹 마스크 캐시 (Uint8ClampedArray, 0/255)
     let browPos = { x: canvas.width / 2, y: canvas.height / 2 };
     let browScale = 1.0;
     let browAngle = 0;
     let isDragging = false;
     let offset = { x: 0, y: 0 };
     let colorApplied = false;
-    let originalFaceSrc = null;
 
-    // ====== MediaPipe FaceMesh 준비 ======
+    // ---- MediaPipe FaceMesh 준비 ----
     let faceMesh = null;
     let mpReady = false;
     let cvReady = false;
 
     function updateReady() {
-      if (mpReady && cvReady) {
-        statusEl.textContent = "준비 완료";
-      }
+      if (mpReady && cvReady) statusEl.textContent = "준비 완료";
     }
+    window.Module = { onRuntimeInitialized() { cvReady = true; updateReady(); } };
 
-    // OpenCV 로딩 상태
-    window.Module = {
-      onRuntimeInitialized() {
-        cvReady = true;
-        updateReady();
-      }
-    };
-
-    // FaceMesh 로딩 및 설정
     function initFaceMesh() {
       faceMesh = new FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
@@ -115,38 +112,34 @@
         minTrackingConfidence: 0.6,
         selfieMode: false
       });
-      // onResults는 스트리밍용 콜백. 정적 이미지 처리는 Promise로 감쌈.
       mpReady = true;
       updateReady();
     }
     initFaceMesh();
 
-    // 정적 이미지에서 랜드마크 추출 (Promise)
     function detectLandmarks(imageElOrCanvas) {
       return new Promise((resolve, reject) => {
-        const fm = faceMesh;
-        if (!fm) return reject(new Error("FaceMesh not ready"));
-        fm.onResults((res) => {
-          // 한 번 결과 받고 콜백 해제
+        if (!faceMesh) return reject(new Error("FaceMesh not ready"));
+        faceMesh.onResults((res) => {
           resolve(res && res.multiFaceLandmarks && res.multiFaceLandmarks[0] ? res.multiFaceLandmarks[0] : null);
         });
-        fm.send({ image: imageElOrCanvas }).catch(reject);
+        faceMesh.send({ image: imageElOrCanvas }).catch(reject);
       });
     }
 
-    // ====== 기존 기능 ======
+    // ---- 파일 로딩 ----
     faceInput.onchange = e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = evt => {
-    originalFaceSrc = evt.target.result;          // ✅ 원본 보관
-    faceImg = new Image();
-    faceImg.onload = draw;
-    faceImg.src = originalFaceSrc;                 // 표시도 원본으로
-  };
-  reader.readAsDataURL(file);
-};
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = evt => {
+        originalFaceSrc = evt.target.result;   // 원본 보관
+        const img = new Image();
+        img.onload = () => { faceImg = img; draw(); faceUndoStack = []; };
+        img.src = originalFaceSrc;
+      };
+      reader.readAsDataURL(file);
+    };
 
     browInput.onchange = e => {
       const file = e.target.files[0];
@@ -154,9 +147,17 @@
       const reader = new FileReader();
       reader.onload = evt => {
         const img = new Image();
-        img.onload = () => {
+        img.onload = async () => {
           originalBrowImg = img;
-          browImg = removeWhite(img);
+
+          // 1) 백색 배경 제거 (JPG 등)
+          const noWhite = removeWhite(img);
+
+          // 2) 눈썹 마스크 자동 추출 (알파 우선, 없으면 HSV 기반)
+          browMaskCache = await buildBrowMask(noWhite);
+
+          // 3) 초기 표시용 이미지
+          browImg = noWhite;
           draw();
           colorApplied = false;
         };
@@ -165,78 +166,173 @@
       reader.readAsDataURL(file);
     };
 
+    // ---- 유틸: 캔버스 스냅샷 ----
+    function snapshotFaceToDataURL() {
+      const off = document.createElement("canvas");
+      off.width = canvas.width; off.height = canvas.height;
+      const octx = off.getContext("2d");
+      if (faceImg) octx.drawImage(faceImg, 0, 0, off.width, off.height);
+      return off.toDataURL();
+    }
+    function pushUndo() {
+      const snap = snapshotFaceToDataURL();
+      faceUndoStack.push(snap);
+      if (faceUndoStack.length > MAX_UNDO) faceUndoStack.shift();
+    }
+
+    // ---- 이미지 처리 ----
     function removeWhite(img) {
-      const tempCanvas = document.createElement("canvas");
-      const tempCtx = tempCanvas.getContext("2d");
-      tempCanvas.width = img.width;
-      tempCanvas.height = img.height;
-      tempCtx.drawImage(img, 0, 0);
-      const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
-      const data = imgData.data;
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      const cctx = c.getContext("2d");
+      cctx.drawImage(img, 0, 0);
+      const id = cctx.getImageData(0, 0, c.width, c.height);
+      const data = id.data;
       for (let i = 0; i < data.length; i += 4) {
-        const r = data[i], g = data[i + 1], b = data[i + 2];
-        if (r > 220 && g > 220 && b > 220) data[i + 3] = 0;
+        const r = data[i], g = data[i+1], b = data[i+2];
+        if (r > 220 && g > 220 && b > 220) data[i+3] = 0;   // 흰색 투명화
       }
-      tempCtx.putImageData(imgData, 0, 0);
-      const result = new Image();
-      result.src = tempCanvas.toDataURL();
-      return result;
+      cctx.putImageData(id, 0, 0);
+      const out = new Image();
+      out.src = c.toDataURL();
+      return out;
+    }
+
+    // 눈썹 마스크 자동 구축 (Uint8ClampedArray 반환, 0/255)
+    async function buildBrowMask(img) {
+      // 알파 마스크 우선 사용
+      let c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      let cctx = c.getContext("2d");
+      cctx.drawImage(img, 0, 0);
+      let id = cctx.getImageData(0, 0, c.width, c.height);
+      const data = id.data;
+      let mask = new Uint8ClampedArray(id.width * id.height);
+
+      let alphaSum = 0;
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        const a = data[i+3];
+        alphaSum += a;
+        mask[j] = a > 10 ? 255 : 0;
+      }
+      // 알파가 충분히 존재하면(대부분 PNG) 그대로 사용
+      if (alphaSum > id.width * id.height * 10) {
+        return mask;
+      }
+
+      // 아니면 OpenCV로 자동 세그멘테이션 (어두운 획을 눈썹으로 가정)
+      let mat = cv.matFromImageData(id);
+      let hsv = new cv.Mat(); let chan = new cv.MatVector(); let v = new cv.Mat();
+      cv.cvtColor(mat, hsv, cv.COLOR_RGBA2RGB);
+      cv.cvtColor(hsv, hsv, cv.COLOR_RGB2HSV);
+      cv.split(hsv, chan);
+      v = chan.get(2); // Value(밝기)
+
+      let inv = new cv.Mat();
+      cv.threshold(v, inv, 200, 255, cv.THRESH_BINARY_INV); // 밝은 배경 제거
+
+      // 노이즈 정리
+      let kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3,3));
+      cv.morphologyEx(inv, inv, cv.MORPH_OPEN, kernel);
+      cv.morphologyEx(inv, inv, cv.MORPH_CLOSE, kernel);
+
+      // 결과를 Uint8로 추출
+      const mdata = inv.data;
+      for (let i = 0; i < mask.length; i++) mask[i] = mdata[i];
+
+      // clean
+      mat.delete(); hsv.delete(); chan.delete(); v.delete(); inv.delete(); kernel.delete();
+      return mask;
+    }
+
+    // ----- 색상 적용 (눈썹만, 밝기 보존: H/S 교체, L 유지) -----
+    function applyColorToBrow(hex) {
+      if (!originalBrowImg) return;
+
+      // 원본을 그려두고 픽셀 접근
+      const c = document.createElement("canvas");
+      c.width = originalBrowImg.width; c.height = originalBrowImg.height;
+      const cctx = c.getContext("2d");
+      cctx.drawImage(originalBrowImg, 0, 0);
+      const id = cctx.getImageData(0, 0, c.width, c.height);
+      const data = id.data;
+
+      // 마스크 준비(캐시 사용)
+      if (!browMaskCache) {
+        // removeWhite 처리 후 마스크 만들기
+        const cleaned = removeWhite(originalBrowImg);
+        // 동기 로드 보장 위해 바로 draw -> imageData 읽음
+        const tc = document.createElement("canvas");
+        tc.width = cleaned.width; tc.height = cleaned.height;
+        const tctx = tc.getContext("2d");
+        tctx.drawImage(cleaned, 0, 0);
+        browMaskCache = new Uint8ClampedArray(tctx.getImageData(0,0,tc.width,tc.height).data.length/4);
+        const ad = tctx.getImageData(0,0,tc.width,tc.height).data;
+        for (let i=0,j=0;i<ad.length;i+=4,j++) browMaskCache[j] = ad[i+3] > 10 ? 255 : 0;
+      }
+
+      const rT = parseInt(hex.slice(1,3),16);
+      const gT = parseInt(hex.slice(3,5),16);
+      const bT = parseInt(hex.slice(5,7),16);
+      const hslT = rgbToHsl(rT,gT,bT); // 목표색의 H,S
+
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        if (browMaskCache[j] === 0) continue; // 눈썹 외 영역 skip
+        const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+        // 원본 밝기 보존: H/S는 목표색, L은 원본
+        const hslO = rgbToHsl(r,g,b);
+        const [hh, ss, ll] = [hslT[0], Math.max(hslT[1], 0.15), hslO[2]];
+        const [nr, ng, nb] = hslToRgb(hh, ss, ll);
+        data[i] = nr; data[i+1] = ng; data[i+2] = nb; data[i+3] = a;
+      }
+      cctx.putImageData(id, 0, 0);
+
+      // 화면용 이미지 갱신
+      const colored = new Image();
+      colored.onload = () => { browImg = colored; colorApplied = true; draw(); };
+      colored.src = c.toDataURL();
     }
 
     alphaSlider.oninput = draw;
 
     colorPicker.oninput = () => {
-      if (!originalBrowImg) return;
-      const canvasTemp = document.createElement("canvas");
-      canvasTemp.width = originalBrowImg.width;
-      canvasTemp.height = originalBrowImg.height;
-      const ctxTemp = canvasTemp.getContext("2d");
-
-      ctxTemp.drawImage(originalBrowImg, 0, 0);
-      const imageData = ctxTemp.getImageData(0, 0, canvasTemp.width, canvasTemp.height);
-      const data = imageData.data;
-      const hex = colorPicker.value;
-      const rNew = parseInt(hex.slice(1, 3), 16);
-      const gNew = parseInt(hex.slice(3, 5), 16);
-      const bNew = parseInt(hex.slice(5, 7), 16);
-
-      for (let i = 0; i < data.length; i += 4) {
-        if (data[i + 3] !== 0) {
-          data[i] = rNew; data[i + 1] = gNew; data[i + 2] = bNew;
-        }
-      }
-      ctxTemp.putImageData(imageData, 0, 0);
-      browImg = new Image();
-      browImg.onload = () => { draw(); colorApplied = true; };
-      browImg.src = canvasTemp.toDataURL();
+      // 자동 마스크를 이용해 색상만 눈썹에 적용
+      applyColorToBrow(colorPicker.value);
     };
 
     resetBtn.onclick = () => {
-  // ✅ 얼굴: 원본으로 되돌리기 (지워졌던 실제 눈썹 복원)
-  if (originalFaceSrc) {
-    const img = new Image();
-    img.onload = () => {
-      faceImg = img;
-      draw(); // 얼굴 먼저 다시 그림
+      // 얼굴: 원본으로 복원
+      if (originalFaceSrc) {
+        const img = new Image();
+        img.onload = () => { faceImg = img; draw(); };
+        img.src = originalFaceSrc;
+      }
+      // 가짜 눈썹 전부 삭제
+      browImg = null;
+      originalBrowImg = null;
+      browMaskCache = null;
+
+      // 파라미터 초기화
+      browScale = 1.0;
+      browAngle = 0;
+      browPos = { x: canvas.width / 2, y: canvas.height / 2 };
+      colorPicker.value = "#000000";
+      alphaSlider.value = 255;
+      colorApplied = false;
+
+      draw();
     };
-    img.src = originalFaceSrc;
-  }
 
-  // ✅ 추가한 눈썹(가짜) 완전히 삭제
-  browImg = null;
-  originalBrowImg = null;
-
-  // ✅ 변환/설정값 초기화
-  browScale = 1.0;
-  browAngle = 0;
-  browPos = { x: canvas.width / 2, y: canvas.height / 2 };
-  colorPicker.value = "#000000";
-  alphaSlider.value = 255;
-  colorApplied = false;
-
-  // 캔버스 다시 그림 (browImg 없으니 얼굴만 보임)
-  draw();
-};
+    undoBtn.onclick = () => {
+      if (faceUndoStack.length === 0) {
+        alert("되돌릴 항목이 없어요.");
+        return;
+      }
+      const last = faceUndoStack.pop();
+      const img = new Image();
+      img.onload = () => { faceImg = img; draw(); };
+      img.src = last;
+    };
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -256,7 +352,7 @@
       ctx.globalAlpha = 1.0;
     }
 
-    // 🖱️ 마우스 드래그 & 휠
+    // ---- 마우스 제스처 ----
     canvas.addEventListener("mousedown", e => {
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
@@ -265,13 +361,8 @@
       const dy = my - browPos.y;
       const w = browImg?.width * browScale || 0;
       const h = browImg?.height * browScale || 0;
-
-      if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
-        isDragging = true;
-        offset = { x: dx, y: dy };
-      }
+      if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) { isDragging = true; offset = { x: dx, y: dy }; }
     });
-
     canvas.addEventListener("mousemove", e => {
       if (!isDragging) return;
       const rect = canvas.getBoundingClientRect();
@@ -279,23 +370,20 @@
       browPos.y = e.clientY - rect.top - offset.y;
       draw();
     });
-
     canvas.addEventListener("mouseup", () => { isDragging = false; });
-
     canvas.addEventListener("wheel", e => {
       e.preventDefault();
       browScale *= (e.deltaY < 0) ? 1.05 : 0.95;
       if (browScale < 0.2) browScale = 0.2;
       draw();
     });
-
     document.addEventListener("keydown", e => {
       if (e.key === "ArrowLeft") browAngle -= 2;
       else if (e.key === "ArrowRight") browAngle += 2;
       draw();
     });
 
-    // 📱 모바일 제스처
+    // ---- 터치 제스처 ----
     let lastTouchDist = null, lastTouchAngle = null;
     canvas.addEventListener("touchstart", e => {
       if (!browImg) return;
@@ -308,10 +396,7 @@
         const dy = my - browPos.y;
         const w = browImg.width * browScale;
         const h = browImg.height * browScale;
-        if (Math.abs(dx) < w / 2 && Math.abs(dy) < h / 2) {
-          isDragging = true;
-          offset = { x: dx, y: dy };
-        }
+        if (Math.abs(dx) < w/2 && Math.abs(dy) < h/2) { isDragging = true; offset = { x: dx, y: dy }; }
       } else if (e.touches.length === 2) {
         const dx = e.touches[1].clientX - e.touches[0].clientX;
         const dy = e.touches[1].clientY - e.touches[0].clientY;
@@ -319,12 +404,10 @@
         lastTouchAngle = Math.atan2(dy, dx);
       }
     }, { passive: false });
-
     canvas.addEventListener("touchmove", e => {
       if (!browImg) return;
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
-
       if (e.touches.length === 1 && isDragging) {
         browPos.x = e.touches[0].clientX - rect.left - offset.x;
         browPos.y = e.touches[0].clientY - rect.top - offset.y;
@@ -334,40 +417,34 @@
         const dy = e.touches[1].clientY - e.touches[0].clientY;
         const dist = Math.hypot(dx, dy);
         const angle = Math.atan2(dy, dx);
-
         if (lastTouchDist !== null) {
           const scaleChange = dist / lastTouchDist;
           browScale *= scaleChange;
           if (browScale < 0.2) browScale = 0.2;
         }
-
         if (lastTouchAngle !== null) {
           const angleChange = angle - lastTouchAngle;
           browAngle += angleChange * (180 / Math.PI);
         }
-
-        lastTouchDist = dist;
-        lastTouchAngle = angle;
-        draw();
+        lastTouchDist = dist; lastTouchAngle = angle; draw();
       }
     }, { passive: false });
-
     canvas.addEventListener("touchend", e => {
-      if (e.touches.length < 2) {
-        lastTouchDist = null;
-        lastTouchAngle = null;
-      }
+      if (e.touches.length < 2) { lastTouchDist = null; lastTouchAngle = null; }
       if (e.touches.length === 0) { isDragging = false; }
     });
 
-    // ====== 핵심: 눈썹 자동 지우기 ======
+    // ---- 눈썹 자동 지우기 (얼굴) ----
     eraseBtn.onclick = async () => {
       try {
         if (!faceImg) { alert("먼저 얼굴 이미지를 업로드하세요."); return; }
         if (!mpReady || !cvReady) { alert("모델 로딩 중입니다. 잠시만요!"); return; }
         statusEl.textContent = "눈썹 지우는 중...";
 
-        // 1) 디스플레이 크기(500x600)에 맞춰 얼굴만 오프스크린에 렌더
+        // 되돌리기 스냅샷 저장
+        pushUndo();
+
+        // 1) 현재 얼굴 렌더
         const srcCan = document.createElement("canvas");
         srcCan.width = canvas.width; srcCan.height = canvas.height;
         const sctx = srcCan.getContext("2d");
@@ -377,24 +454,18 @@
         const landmarks = await detectLandmarks(srcCan);
         if (!landmarks) { statusEl.textContent = "얼굴을 찾지 못했습니다."; return; }
 
-        // 3) 눈썹 영역 마스크 생성
-        // MediaPipe FaceMesh에는 FACEMESH_LEFT_EYEBROW / FACEMESH_RIGHT_EYEBROW 연결이 있음.
-        // 연결의 양 끝 점들을 모아 컨벡스 헐로 채움.
+        // 3) 눈썹 마스크 생성 (왼/오른)
         const lPts = uniqueEndpoints(window.FACEMESH_LEFT_EYEBROW || []);
         const rPts = uniqueEndpoints(window.FACEMESH_RIGHT_EYEBROW || []);
-
         const maskCan = document.createElement("canvas");
         maskCan.width = srcCan.width; maskCan.height = srcCan.height;
         const mctx = maskCan.getContext("2d");
         mctx.fillStyle = "white";
-
-        // 좌/우 눈썹 폴리곤 채우기 (간단히: 연결점들의 컨벡스헐)
         fillRegionHull(mctx, landmarks, lPts, srcCan.width, srcCan.height);
         fillRegionHull(mctx, landmarks, rPts, srcCan.width, srcCan.height);
 
-        // 팽창 효과: 마스크를 살짝 두껍게 (블러 후 바이너리화)
+        // 팽창/블러로 부드럽게
         const maskImg = mctx.getImageData(0, 0, maskCan.width, maskCan.height);
-        // OpenCV로 팽창 & 블러
         let maskMat = cv.matFromImageData(maskImg);
         cv.cvtColor(maskMat, maskMat, cv.COLOR_RGBA2GRAY);
         let kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(9, 9));
@@ -409,35 +480,31 @@
         cv.cvtColor(srcMat, srcMat, cv.COLOR_RGBA2RGB);
         cv.inpaint(srcMat, maskMat, dstMat, 3, cv.INPAINT_TELEA);
 
-        // 5) 결과를 faceImg로 반영
+        // 5) 결과 반영
         let outRGBA = new cv.Mat();
         cv.cvtColor(dstMat, outRGBA, cv.COLOR_RGB2RGBA);
         const outCan = document.createElement("canvas");
         outCan.width = srcCan.width; outCan.height = srcCan.height;
         cv.imshow(outCan, outRGBA);
 
-        faceImg = new Image();
-        faceImg.onload = () => { draw(); statusEl.textContent = "준비 완료"; };
-        faceImg.src = outCan.toDataURL();
+        const newFace = new Image();
+        newFace.onload = () => { faceImg = newFace; draw(); statusEl.textContent = "준비 완료"; };
+        newFace.src = outCan.toDataURL();
 
         // clean
         srcMat.delete(); dstMat.delete(); outRGBA.delete(); maskMat.delete(); kernel.delete();
-
       } catch (err) {
         console.error(err);
-        statusEl.textContent = "실패: 콘솔을 확인하세요.";
+        statusEl.textContent = "실패: 콘솔 확인";
         alert("눈썹 지우기 중 오류가 발생했습니다.");
       }
     };
 
-    // 연결 리스트에서 엔드포인트 인덱스 집합 구하기
     function uniqueEndpoints(connections) {
       const set = new Set();
       for (const [a,b] of connections) { set.add(a); set.add(b); }
       return Array.from(set);
     }
-
-    // 점들의 컨벡스 헐을 그려 채우기
     function fillRegionHull(ctx2d, landmarks, idxList, W, H) {
       const pts = idxList.map(i => [landmarks[i].x * W, landmarks[i].y * H]);
       if (pts.length < 3) return;
@@ -448,17 +515,50 @@
       ctx2d.closePath();
       ctx2d.fill();
     }
-
-    // Graham scan (간단 컨벡스헐)
     function convexHull(points) {
       points = points.slice().sort((a,b)=>a[0]===b[0]?a[1]-b[1]:a[0]-b[0]);
       const cross = (o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
-      const lower=[];
-      for (const p of points){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p)<=0) lower.pop(); lower.push(p); }
-      const upper=[];
-      for (let i=points.length-1;i>=0;i--){ const p=points[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p)<=0) upper.pop(); upper.push(p); }
-      upper.pop(); lower.pop();
-      return lower.concat(upper);
+      const lower=[]; for (const p of points){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p)<=0) lower.pop(); lower.push(p); }
+      const upper=[]; for (let i=points.length-1;i>=0;i--){ const p=points[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p)<=0) upper.pop(); upper.push(p); }
+      upper.pop(); lower.pop(); return lower.concat(upper);
+    }
+
+    // ---- 색상변환 보조(HSL) ----
+    function rgbToHsl(r,g,b){
+      r/=255; g/=255; b/=255;
+      const max = Math.max(r,g,b), min = Math.min(r,g,b);
+      let h, s, l=(max+min)/2;
+      if(max===min){ h=s=0; }
+      else{
+        const d=max-min;
+        s=l>0.5? d/(2-max-min): d/(max+min);
+        switch(max){
+          case r: h=(g-b)/d+(g<b?6:0); break;
+          case g: h=(b-r)/d+2; break;
+          case b: h=(r-g)/d+4; break;
+        }
+        h/=6;
+      }
+      return [h,s,l];
+    }
+    function hslToRgb(h,s,l){
+      let r,g,b;
+      if(s===0){ r=g=b=l; }
+      else{
+        const hue2rgb=(p,q,t)=>{
+          if(t<0) t+=1; if(t>1) t-=1;
+          if(t<1/6) return p+(q-p)*6*t;
+          if(t<1/2) return q;
+          if(t<2/3) return p+(q-p)*(2/3 - t)*6;
+          return p;
+        };
+        const q=l<0.5? l*(1+s): l+s-l*s;
+        const p=2*l-q;
+        r=hue2rgb(p,q,h+1/3);
+        g=hue2rgb(p,q,h);
+        b=hue2rgb(p,q,h-1/3);
+      }
+      return [Math.round(r*255), Math.round(g*255), Math.round(b*255)];
     }
   </script>
 </body>
