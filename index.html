@@ -11,75 +11,23 @@
       justify-content: center;
       padding: 20px;
     }
-
-    .container {
-      display: flex;
-      flex-direction: row;
-      align-items: flex-start;
-      max-width: 1200px;
-      width: 100%;
-    }
-
+    .container { display: flex; flex-direction: row; align-items: flex-start; max-width: 1200px; width: 100%; }
     .controls {
-      width: 280px;
-      margin-right: 30px;
-      background-color: #fff9f3;
-      padding: 20px;
-      border-radius: 12px;
+      width: 280px; margin-right: 30px; background-color: #fff9f3; padding: 20px; border-radius: 12px;
       box-shadow: 0 0 10px rgba(0,0,0,0.05);
     }
-
-    .controls h1 {
-      color: #f2792b;
-      font-size: 20px;
-      margin-bottom: 20px;
-      text-align: center;
-    }
-
-    .controls label {
-      font-size: 14px;
-      font-weight: bold;
-      color: #333;
-    }
-
-    .controls input[type="file"] {
-      margin-bottom: 15px;
-      display: block;
-    }
-
-    .controls input[type="range"] {
-      width: 100%;
-      margin-bottom: 10px;
-    }
-
+    .controls h1 { color: #f2792b; font-size: 20px; margin-bottom: 20px; text-align: center; }
+    .controls label { font-size: 14px; font-weight: bold; color: #333; }
+    .controls input[type="file"] { margin-bottom: 15px; display: block; }
+    .controls input[type="range"] { width: 100%; margin-bottom: 10px; }
     .controls input[type="color"] {
-      width: 35px;
-      height: 35px;
-      border: none;
-      border-radius: 50%;
-      margin-bottom: 15px;
-      padding: 0;
+      width: 35px; height: 35px; border: none; border-radius: 50%; margin-bottom: 15px; padding: 0;
     }
-
-    canvas {
-      border: 4px solid #f2792b;
-      border-radius: 16px;
-      background-color: #fff;
-    }
-
-    button {
-      background-color: #f2792b;
-      color: white;
-      border: none;
-      padding: 8px 14px;
-      font-size: 14px;
-      border-radius: 6px;
-      cursor: pointer;
-    }
-
-    button:hover {
-      background-color: #d25e1d;
-    }
+    canvas { border: 4px solid #f2792b; border-radius: 16px; background-color: #fff; }
+    button { background-color: #f2792b; color: white; border: none; padding: 8px 14px; font-size: 14px; border-radius: 6px; cursor: pointer; }
+    button:hover { background-color: #d25e1d; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .muted { font-size: 12px; color: #666; margin-top: 6px;}
   </style>
 </head>
 <body>
@@ -99,11 +47,20 @@
       <label>눈썹 색상 선택</label>
       <input type="color" id="colorPicker" />
 
-      <button id="resetBtn">리셋</button>
+      <div class="row">
+        <button id="resetBtn">리셋</button>
+        <button id="eraseBtn">눈썹 지우기</button>
+      </div>
+      <div class="muted" id="status">모델 로딩 중...</div>
     </div>
 
     <canvas id="canvas" width="500" height="600"></canvas>
   </div>
+
+  <!-- OpenCV.js -->
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <!-- MediaPipe FaceMesh (legacy) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 
   <script>
     const faceInput = document.getElementById("faceInput");
@@ -111,8 +68,10 @@
     const alphaSlider = document.getElementById("alphaSlider");
     const colorPicker = document.getElementById("colorPicker");
     const resetBtn = document.getElementById("resetBtn");
+    const eraseBtn = document.getElementById("eraseBtn");
     const canvas = document.getElementById("canvas");
     const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
 
     let faceImg = null;
     let browImg = null;
@@ -124,6 +83,57 @@
     let offset = { x: 0, y: 0 };
     let colorApplied = false;
 
+    // ====== MediaPipe FaceMesh 준비 ======
+    let faceMesh = null;
+    let mpReady = false;
+    let cvReady = false;
+
+    function updateReady() {
+      if (mpReady && cvReady) {
+        statusEl.textContent = "준비 완료";
+      }
+    }
+
+    // OpenCV 로딩 상태
+    window.Module = {
+      onRuntimeInitialized() {
+        cvReady = true;
+        updateReady();
+      }
+    };
+
+    // FaceMesh 로딩 및 설정
+    function initFaceMesh() {
+      faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.6,
+        minTrackingConfidence: 0.6,
+        selfieMode: false
+      });
+      // onResults는 스트리밍용 콜백. 정적 이미지 처리는 Promise로 감쌈.
+      mpReady = true;
+      updateReady();
+    }
+    initFaceMesh();
+
+    // 정적 이미지에서 랜드마크 추출 (Promise)
+    function detectLandmarks(imageElOrCanvas) {
+      return new Promise((resolve, reject) => {
+        const fm = faceMesh;
+        if (!fm) return reject(new Error("FaceMesh not ready"));
+        fm.onResults((res) => {
+          // 한 번 결과 받고 콜백 해제
+          resolve(res && res.multiFaceLandmarks && res.multiFaceLandmarks[0] ? res.multiFaceLandmarks[0] : null);
+        });
+        fm.send({ image: imageElOrCanvas }).catch(reject);
+      });
+    }
+
+    // ====== 기존 기능 ======
     faceInput.onchange = e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -162,7 +172,7 @@
       const imgData = tempCtx.getImageData(0, 0, img.width, img.height);
       const data = imgData.data;
       for (let i = 0; i < data.length; i += 4) {
-        const [r, g, b] = [data[i], data[i + 1], data[i + 2]];
+        const r = data[i], g = data[i + 1], b = data[i + 2];
         if (r > 220 && g > 220 && b > 220) data[i + 3] = 0;
       }
       tempCtx.putImageData(imgData, 0, 0);
@@ -190,18 +200,12 @@
 
       for (let i = 0; i < data.length; i += 4) {
         if (data[i + 3] !== 0) {
-          data[i] = rNew;
-          data[i + 1] = gNew;
-          data[i + 2] = bNew;
+          data[i] = rNew; data[i + 1] = gNew; data[i + 2] = bNew;
         }
       }
-
       ctxTemp.putImageData(imageData, 0, 0);
       browImg = new Image();
-      browImg.onload = () => {
-        draw();
-        colorApplied = true;
-      };
+      browImg.onload = () => { draw(); colorApplied = true; };
       browImg.src = canvasTemp.toDataURL();
     };
 
@@ -259,9 +263,7 @@
       draw();
     });
 
-    canvas.addEventListener("mouseup", () => {
-      isDragging = false;
-    });
+    canvas.addEventListener("mouseup", () => { isDragging = false; });
 
     canvas.addEventListener("wheel", e => {
       e.preventDefault();
@@ -276,10 +278,8 @@
       draw();
     });
 
-    // 📱 모바일 터치 제스처
-    let lastTouchDist = null;
-    let lastTouchAngle = null;
-
+    // 📱 모바일 제스처
+    let lastTouchDist = null, lastTouchAngle = null;
     canvas.addEventListener("touchstart", e => {
       if (!browImg) return;
       e.preventDefault();
@@ -340,10 +340,109 @@
         lastTouchDist = null;
         lastTouchAngle = null;
       }
-      if (e.touches.length === 0) {
-        isDragging = false;
-      }
+      if (e.touches.length === 0) { isDragging = false; }
     });
+
+    // ====== 핵심: 눈썹 자동 지우기 ======
+    eraseBtn.onclick = async () => {
+      try {
+        if (!faceImg) { alert("먼저 얼굴 이미지를 업로드하세요."); return; }
+        if (!mpReady || !cvReady) { alert("모델 로딩 중입니다. 잠시만요!"); return; }
+        statusEl.textContent = "눈썹 지우는 중...";
+
+        // 1) 디스플레이 크기(500x600)에 맞춰 얼굴만 오프스크린에 렌더
+        const srcCan = document.createElement("canvas");
+        srcCan.width = canvas.width; srcCan.height = canvas.height;
+        const sctx = srcCan.getContext("2d");
+        sctx.drawImage(faceImg, 0, 0, srcCan.width, srcCan.height);
+
+        // 2) 랜드마크 추출
+        const landmarks = await detectLandmarks(srcCan);
+        if (!landmarks) { statusEl.textContent = "얼굴을 찾지 못했습니다."; return; }
+
+        // 3) 눈썹 영역 마스크 생성
+        // MediaPipe FaceMesh에는 FACEMESH_LEFT_EYEBROW / FACEMESH_RIGHT_EYEBROW 연결이 있음.
+        // 연결의 양 끝 점들을 모아 컨벡스 헐로 채움.
+        const lPts = uniqueEndpoints(window.FACEMESH_LEFT_EYEBROW || []);
+        const rPts = uniqueEndpoints(window.FACEMESH_RIGHT_EYEBROW || []);
+
+        const maskCan = document.createElement("canvas");
+        maskCan.width = srcCan.width; maskCan.height = srcCan.height;
+        const mctx = maskCan.getContext("2d");
+        mctx.fillStyle = "white";
+
+        // 좌/우 눈썹 폴리곤 채우기 (간단히: 연결점들의 컨벡스헐)
+        fillRegionHull(mctx, landmarks, lPts, srcCan.width, srcCan.height);
+        fillRegionHull(mctx, landmarks, rPts, srcCan.width, srcCan.height);
+
+        // 팽창 효과: 마스크를 살짝 두껍게 (블러 후 바이너리화)
+        const maskImg = mctx.getImageData(0, 0, maskCan.width, maskCan.height);
+        // OpenCV로 팽창 & 블러
+        let maskMat = cv.matFromImageData(maskImg);
+        cv.cvtColor(maskMat, maskMat, cv.COLOR_RGBA2GRAY);
+        let kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(9, 9));
+        cv.dilate(maskMat, maskMat, kernel);
+        cv.GaussianBlur(maskMat, maskMat, new cv.Size(7,7), 0);
+        cv.threshold(maskMat, maskMat, 10, 255, cv.THRESH_BINARY);
+
+        // 4) Inpaint
+        const srcImgData = sctx.getImageData(0, 0, srcCan.width, srcCan.height);
+        let srcMat = cv.matFromImageData(srcImgData);
+        let dstMat = new cv.Mat();
+        cv.cvtColor(srcMat, srcMat, cv.COLOR_RGBA2RGB);
+        cv.inpaint(srcMat, maskMat, dstMat, 3, cv.INPAINT_TELEA);
+
+        // 5) 결과를 faceImg로 반영
+        let outRGBA = new cv.Mat();
+        cv.cvtColor(dstMat, outRGBA, cv.COLOR_RGB2RGBA);
+        const outCan = document.createElement("canvas");
+        outCan.width = srcCan.width; outCan.height = srcCan.height;
+        cv.imshow(outCan, outRGBA);
+
+        faceImg = new Image();
+        faceImg.onload = () => { draw(); statusEl.textContent = "준비 완료"; };
+        faceImg.src = outCan.toDataURL();
+
+        // clean
+        srcMat.delete(); dstMat.delete(); outRGBA.delete(); maskMat.delete(); kernel.delete();
+
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "실패: 콘솔을 확인하세요.";
+        alert("눈썹 지우기 중 오류가 발생했습니다.");
+      }
+    };
+
+    // 연결 리스트에서 엔드포인트 인덱스 집합 구하기
+    function uniqueEndpoints(connections) {
+      const set = new Set();
+      for (const [a,b] of connections) { set.add(a); set.add(b); }
+      return Array.from(set);
+    }
+
+    // 점들의 컨벡스 헐을 그려 채우기
+    function fillRegionHull(ctx2d, landmarks, idxList, W, H) {
+      const pts = idxList.map(i => [landmarks[i].x * W, landmarks[i].y * H]);
+      if (pts.length < 3) return;
+      const hull = convexHull(pts);
+      ctx2d.beginPath();
+      ctx2d.moveTo(hull[0][0], hull[0][1]);
+      for (let i=1;i<hull.length;i++) ctx2d.lineTo(hull[i][0], hull[i][1]);
+      ctx2d.closePath();
+      ctx2d.fill();
+    }
+
+    // Graham scan (간단 컨벡스헐)
+    function convexHull(points) {
+      points = points.slice().sort((a,b)=>a[0]===b[0]?a[1]-b[1]:a[0]-b[0]);
+      const cross = (o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+      const lower=[];
+      for (const p of points){ while(lower.length>=2 && cross(lower[lower.length-2], lower[lower.length-1], p)<=0) lower.pop(); lower.push(p); }
+      const upper=[];
+      for (let i=points.length-1;i>=0;i--){ const p=points[i]; while(upper.length>=2 && cross(upper[upper.length-2], upper[upper.length-1], p)<=0) upper.pop(); upper.push(p); }
+      upper.pop(); lower.pop();
+      return lower.concat(upper);
+    }
   </script>
 </body>
 </html>
