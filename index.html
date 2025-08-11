@@ -82,6 +82,7 @@
     let isDragging = false;
     let offset = { x: 0, y: 0 };
     let colorApplied = false;
+    let originalFaceSrc = null;
 
     // ====== MediaPipe FaceMesh 준비 ======
     let faceMesh = null;
@@ -135,16 +136,17 @@
 
     // ====== 기존 기능 ======
     faceInput.onchange = e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = evt => {
-        faceImg = new Image();
-        faceImg.onload = draw;
-        faceImg.src = evt.target.result;
-      };
-      reader.readAsDataURL(file);
-    };
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => {
+    originalFaceSrc = evt.target.result;          // ✅ 원본 보관
+    faceImg = new Image();
+    faceImg.onload = draw;
+    faceImg.src = originalFaceSrc;                 // 표시도 원본으로
+  };
+  reader.readAsDataURL(file);
+};
 
     browInput.onchange = e => {
       const file = e.target.files[0];
@@ -210,16 +212,31 @@
     };
 
     resetBtn.onclick = () => {
-      if (!originalBrowImg) return;
-      browImg = removeWhite(originalBrowImg);
-      browScale = 1.0;
-      browAngle = 0;
-      browPos = { x: canvas.width / 2, y: canvas.height / 2 };
-      colorPicker.value = "#000000";
-      alphaSlider.value = 255;
-      draw();
-      colorApplied = false;
+  // ✅ 얼굴: 원본으로 되돌리기 (지워졌던 실제 눈썹 복원)
+  if (originalFaceSrc) {
+    const img = new Image();
+    img.onload = () => {
+      faceImg = img;
+      draw(); // 얼굴 먼저 다시 그림
     };
+    img.src = originalFaceSrc;
+  }
+
+  // ✅ 추가한 눈썹(가짜) 완전히 삭제
+  browImg = null;
+  originalBrowImg = null;
+
+  // ✅ 변환/설정값 초기화
+  browScale = 1.0;
+  browAngle = 0;
+  browPos = { x: canvas.width / 2, y: canvas.height / 2 };
+  colorPicker.value = "#000000";
+  alphaSlider.value = 255;
+  colorApplied = false;
+
+  // 캔버스 다시 그림 (browImg 없으니 얼굴만 보임)
+  draw();
+};
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
